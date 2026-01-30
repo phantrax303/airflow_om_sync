@@ -1,0 +1,141 @@
+version: "3.9"
+
+volumes:
+  ingestion-volume-dag-airflow:
+  ingestion-volume-dags:
+  ingestion-volume-tmp:
+  es-data:
+  mysql-data:
+
+services:
+  mysql:
+    container_name: openmetadata_mysql
+    image: docker.getcollate.io/openmetadata/db:1.11.4
+    command:
+      - "--sort_buffer_size=10M"
+      - "--binlog-expire-logs-seconds=432000"
+      - "--max-binlog-size=100M"
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+    ports:
+      - "3306:3306"
+    volumes:
+     - mysql-data:/var/lib/mysql
+    networks:
+      - app_net
+    healthcheck:
+      # Use mysqladmin ping instead of trying to 'use' a database that might not exist yet
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ppassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    container_name: openmetadata_elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.4
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1024m -Xmx1024m
+      - xpack.security.enabled=false
+    networks:
+      - app_net
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: "curl -s http://localhost:9200/_cluster/health?pretty | grep status | grep -qE 'green|yellow' || exit 1"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+
+  execute-migrate-all:
+    container_name: execute_migrate_all
+    image: docker.getcollate.io/openmetadata/server:1.11.4
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    # All environment variables matched the reference file and were omitted
+    env_file:
+      - ./env/.env.om_database    
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_net
+
+  openmetadata-server:
+    container_name: openmetadata_server
+    restart: always
+    image: docker.getcollate.io/openmetadata/server:1.11.4
+    env_file:
+      - ./env/.env.elasticsearch
+      - ./env/.env.om_database
+      - ./env/.env.pipeline
+    ports:
+      - "8585:8585"
+      - "8586:8586"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      execute-migrate-all:
+        condition: service_completed_successfully
+    networks:
+      - app_net
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "--spider",  "http://localhost:8586/healthcheck" ]
+
+  ingestion:
+    container_name: openmetadata_ingestion
+    image: docker.getcollate.io/openmetadata/ingestion:1.11.4
+    depends_on:
+      elasticsearch:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      openmetadata-server:
+        condition: service_started
+    env_file:
+      - ./env/.env.pipeline
+      - ./env/.env.airflow_database
+    entrypoint: /bin/bash
+    command: >
+      -c "if [ -f /opt/airflow/dags/requirements.txt ]; then
+            pip install --no-cache-dir -r /opt/airflow/dags/requirements.txt;
+          fi;
+          /opt/airflow/ingestion_dependency.sh"
+    ports:
+      - "8080:8080"
+    networks:
+      - app_net
+    volumes:
+      - ingestion-volume-dag-airflow:/opt/airflow/dag_generated_configs
+      - ./openmetadata_dags:/opt/airflow/dags
+      - ingestion-volume-tmp:/tmp
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8123:8123" # HTTP port
+      - "9900:9000" # Native port
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: default
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - app_net
+    restart: always
+
+networks:
+  app_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.16.240.0/24"

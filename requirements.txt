@@ -1,0 +1,10 @@
+# Core Airflow
+apache-airflow==2.10.2
+pendulum==3.0.0
+
+# Database Connectors
+clickhouse-connect==0.7.8
+
+# API & Utilities
+requests==2.32.3
+python-dateutil==2.9.0.post0
