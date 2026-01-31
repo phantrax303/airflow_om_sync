@@ -299,7 +299,7 @@ def failure_callback_slack(
         content_blocks=content_blocks, 
         buttons=[{
             "text": button_text,
-            "url": primary_log_url
+            "url": primary_log_url,
             "style": button_style
         }]
     )

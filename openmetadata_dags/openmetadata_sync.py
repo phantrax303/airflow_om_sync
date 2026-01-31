@@ -83,8 +83,13 @@ def sync_dag():
 
         logging.info(f"Connecting to OpenMetadata at {url_root}")
         
-        # 1. Fetch Databases
         db_resp = requests.get(f'{url_root}/databaseSchemas/?limit={return_limit}', headers=headers)
+        try:
+            db_resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"Failed to connect to OpenMetadata: {db_resp.status_code} - {db_resp.text}")
+            raise Exception(f"OpenMetadata connection failed: {e}") from e
+
         for db in db_resp.json().get('data', []):
             key = f"database|{db['name']}|None|None"
             om_resources[key] = {
@@ -94,6 +99,13 @@ def sync_dag():
 
         # 2. Fetch Tables and Columns
         table_resp = requests.get(f'{url_root}/tables/?limit={return_limit}', headers=headers)
+
+         try:
+            table_resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"Failed to connect to OpenMetadata: {table_resp.status_code} - {table_resp.text}")
+            raise Exception(f"OpenMetadata connection failed: {e}") from e
+
         for table in table_resp.json().get('data', []):
             fqn_parts = table['fullyQualifiedName'].split('.')
             db_name = fqn_parts[-2]
@@ -190,6 +202,7 @@ def sync_dag():
         logging.info(f"Cleaning up XComs for run: {dr.run_id}")
         delete_xcom_function(dag_id=dr.dag_id, run_id=dr.run_id, session=session)
 
+    # --- Pipeline Execution ---
     ch_inv = get_clickhouse_resources()
     om_inv = get_om_resources()
 

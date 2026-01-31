@@ -18,6 +18,7 @@ services:
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: password
+      MYSQL_ROOT_HOST: "%"
     ports:
       - "3306:3306"
     volumes:
@@ -30,6 +31,26 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  mysql-setup:
+    image: mysql:8.0
+    networks:
+      - app_net
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: 
+      - /bin/bash
+      - -c
+      - |
+        mysql -h mysql -u root -ppassword <<EOF
+        CREATE DATABASE IF NOT EXISTS airflow_db;
+        CREATE USER IF NOT EXISTS 'airflow_user'@'%' IDENTIFIED BY 'airflow_pass';
+        GRANT ALL PRIVILEGES ON airflow_db.* TO 'airflow_user'@'%';
+        SET GLOBAL log_bin_trust_function_creators = 1;
+        FLUSH PRIVILEGES;
+        EOF
+        echo 'Airflow DB and User created successfully!'
 
   elasticsearch:
     container_name: openmetadata_elasticsearch
@@ -104,7 +125,9 @@ services:
       - ./env/.env.airflow_database
     entrypoint: /bin/bash
     command: >
-      -c "if [ -f /opt/airflow/dags/requirements.txt ]; then
+      -c "
+          airflow db migrate;
+          if [ -f /opt/airflow/dags/requirements.txt ]; then
             pip install --no-cache-dir -r /opt/airflow/dags/requirements.txt;
           fi;
           /opt/airflow/ingestion_dependency.sh"
